@@ -1,0 +1,142 @@
+/**
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this file,
+ * You can obtain one at http://mozilla.org/MPL/2.0/.
+ */
+package org.obsplatform.infrastructure.codes.service;
+
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.List;
+
+import org.obsplatform.crm.clientprospect.service.SearchSqlQuery;
+import org.obsplatform.infrastructure.codes.data.CodeData;
+import org.obsplatform.infrastructure.codes.exception.CodeNotFoundException;
+import org.obsplatform.infrastructure.core.service.Page;
+import org.obsplatform.infrastructure.core.service.PaginationHelper;
+import org.obsplatform.infrastructure.core.service.RoutingDataSource;
+import org.obsplatform.infrastructure.security.service.PlatformSecurityContext;
+import org.obsplatform.portfolio.plan.data.BillRuleData;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.EmptyResultDataAccessException;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowMapper;
+import org.springframework.stereotype.Service;
+
+@Service
+public class CodeReadPlatformServiceImpl implements CodeReadPlatformService {
+
+    private final JdbcTemplate jdbcTemplate;
+    private final PlatformSecurityContext context;
+    private final PaginationHelper<CodeData> paginationHelper = new PaginationHelper<CodeData>();
+    
+    @Autowired
+    public CodeReadPlatformServiceImpl(final PlatformSecurityContext context, final RoutingDataSource dataSource) {
+        this.context = context;
+        this.jdbcTemplate = new JdbcTemplate(dataSource);
+    }
+
+    private static final class CodeMapper implements RowMapper<CodeData> {
+
+        public String schema() {
+            return " c.id as id, c.code_name as code_name, c.code_description as codeDescription,c.is_system_defined as systemDefined from m_code c ";
+        }
+
+        @Override
+        public CodeData mapRow(final ResultSet rs, @SuppressWarnings("unused") final int rowNum) throws SQLException {
+
+            final Long id = rs.getLong("id");
+            final String code_name = rs.getString("code_name");
+            final String codeDescription = rs.getString("codeDescription");
+            final boolean systemDefined = rs.getBoolean("systemDefined");
+
+            return CodeData.instance(id, code_name,codeDescription, systemDefined);
+        }
+    }
+
+    @Override
+    public Page<CodeData> retrieveAllCodes(SearchSqlQuery searchCodes) {
+        context.authenticatedUser();
+
+        final CodeMapper rm = new CodeMapper();
+        StringBuilder sqlBuilder = new StringBuilder(200);
+        sqlBuilder.append("select ");
+        sqlBuilder.append(rm.schema());
+        sqlBuilder.append(" order by c.code_name");
+        //final String sql = "select " + rm.schema() + " order by c.code_name";
+        if (searchCodes.isLimited()) {
+            sqlBuilder.append(" limit ").append(searchCodes.getLimit());
+        }
+        if (searchCodes.isOffset()) {
+            sqlBuilder.append(" offset ").append(searchCodes.getOffset());
+        }
+        //return this.jdbcTemplate.query(sql, rm, new Object[] {});
+        return this.paginationHelper.fetchPage(this.jdbcTemplate, "SELECT FOUND_ROWS()",sqlBuilder.toString(),
+	            new Object[] {}, rm);
+    }
+
+    @Override
+    public CodeData retrieveCode(final Long codeId) {
+        try {
+            context.authenticatedUser();
+
+            final CodeMapper rm = new CodeMapper();
+            final String sql = "select " + rm.schema() + " where c.id = ?";
+
+            return this.jdbcTemplate.queryForObject(sql, rm, new Object[] { codeId });
+        } catch (EmptyResultDataAccessException e) {
+            throw new CodeNotFoundException(codeId);
+        }
+    }
+    
+    @Override
+    public CodeData retriveCode(final String codeName) {
+        try {
+            this.context.authenticatedUser();
+
+            final CodeMapper rm = new CodeMapper();
+            final String sql = "select " + rm.schema() + " where c.code_name = ?";
+
+            return this.jdbcTemplate.queryForObject(sql, rm, new Object[] { codeName });
+        } catch (final EmptyResultDataAccessException e) {
+            throw new CodeNotFoundException(codeName);
+        }
+    }
+    
+
+	/*
+	 *Retrieve billing Rules
+	 */
+	@Override
+	public List<BillRuleData> retrievebillRules(String enumName) {
+
+		context.authenticatedUser();
+
+		final BillRuleDataMapper mapper = new BillRuleDataMapper();
+
+		final String sql = "select " + mapper.schema(enumName);
+
+		return this.jdbcTemplate.query(sql, mapper, new Object[] {});
+	}
+
+	private static final class BillRuleDataMapper implements RowMapper<BillRuleData> {
+
+		public String schema(String enumName) {
+			return " b.enum_id AS id,b.enum_message_property AS billingRule,b.enum_value AS value FROM r_enum_value b" +
+					" WHERE enum_name = '"+enumName+"'";
+
+		}
+
+		@Override
+		public BillRuleData mapRow(final ResultSet rs,final int rowNum) throws SQLException {
+
+			final Long id = rs.getLong("id");
+			final String billrules = rs.getString("billingRule");
+			final String value = rs.getString("value");
+			return new BillRuleData(id, billrules,value);
+			
+		}
+	}
+
+    
+}

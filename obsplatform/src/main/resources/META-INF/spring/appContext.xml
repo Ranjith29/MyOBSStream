@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+
+    This Source Code Form is subject to the terms of the Mozilla Public
+    License, v. 2.0. If a copy of the MPL was not distributed with this file,
+    You can obtain one at http://mozilla.org/MPL/2.0/.
+
+-->
+<beans xmlns="http://www.springframework.org/schema/beans"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+	xmlns:context="http://www.springframework.org/schema/context"
+	xmlns:jpa="http://www.springframework.org/schema/data/jpa" 
+	xmlns:sec="http://www.springframework.org/schema/security"
+	xmlns:tx="http://www.springframework.org/schema/tx" 
+	xmlns:cache="http://www.springframework.org/schema/cache"
+	xsi:schemaLocation="http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-3.0.xsd
+		http://www.springframework.org/schema/data/jpa http://www.springframework.org/schema/data/jpa/spring-jpa.xsd
+		http://www.springframework.org/schema/security http://www.springframework.org/schema/security/spring-security-3.2.xsd
+		http://www.springframework.org/schema/tx http://www.springframework.org/schema/tx/spring-tx-3.0.xsd
+		http://www.springframework.org/schema/context http://www.springframework.org/schema/context/spring-context-3.0.xsd
+		http://www.springframework.org/schema/cache http://www.springframework.org/schema/cache/spring-cache.xsd">
+
+	<sec:global-method-security pre-post-annotations="enabled" />
+	
+	<tx:annotation-driven />
+	
+	<context:component-scan base-package="org.obsplatform.*">
+	
+		<context:exclude-filter expression="org.springframework.stereotype.Controller" type="annotation" />
+		
+		<!-- We do NOT want all @Configuration "beans" to be auto-detected by ComponentScan,
+			 but we want to use / import them explicitly in Tests & Spring Boot applications,
+			 or other import in other @Configuration, so that we could have mutually exclusive ones.
+		 -->
+		<context:exclude-filter expression="org.springframework.context.annotation.Configuration" type="annotation" />
+		
+	</context:component-scan>
+	<bean id="connectionFactory" class="org.apache.activemq.ActiveMQConnectionFactory">
+        <property name="brokerURL" value="tcp://localhost:61616" />
+    </bean>
+    <bean id="messageDestination" class="org.apache.activemq.command.ActiveMQQueue">
+        <constructor-arg value="messageQueue1" />
+    </bean>
+    <bean id="jmsTemplate" class="org.springframework.jms.core.JmsTemplate">
+        <property name="connectionFactory" ref="connectionFactory" />
+        <property name="receiveTimeout" value="10000" />
+    </bean>
+    
+    
+    <!-- Message Producer Definition -->
+    <bean id="messageProducer" class="org.obsplatform.infrastructure.jms.config.MessageProducer">
+        
+    </bean>
+    
+    <!-- Message consumer Definition -->
+    <bean id="messageConsumer" class="org.obsplatform.infrastructure.jms.config.MessageConsumer">
+        </bean>
+    
+    
+    <!-- <bean id="messageListener" class="javax.jms.MessageListener" /> 
+  -->
+ <bean id="jmsContainer" class="org.springframework.jms.listener.DefaultMessageListenerContainer"> 
+    <property name="connectionFactory" ref="connectionFactory"/> 
+    <property name="destination" ref ="messageDestination"/> 
+    <property name="messageListener" ref="messageConsumer" /> 
+    <property name="sessionAcknowledgeModeName" value="AUTO_ACKNOWLEDGE"/>
+</bean>
+
+     
+    
+	
+	<bean id="auditorAware" class="org.obsplatform.infrastructure.core.domain.AuditorAwareImpl" />
+	<jpa:auditing auditor-aware-ref="auditorAware" />
+	
+    <jpa:repositories base-package="org.obsplatform.*" />
+    
+    <import resource="infrastructure.xml" />
+		
+	<import resource="securityContext.xml" />
+
+   	<import resource="cache.xml" />
+  
+    </beans>

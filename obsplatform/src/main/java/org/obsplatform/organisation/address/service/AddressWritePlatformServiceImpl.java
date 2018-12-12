@@ -1,0 +1,413 @@
+package org.obsplatform.organisation.address.service;
+
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+import org.hibernate.exception.ConstraintViolationException;
+import org.obsplatform.infrastructure.codes.exception.CodeNotFoundException;
+import org.obsplatform.infrastructure.configuration.domain.Configuration;
+import org.obsplatform.infrastructure.configuration.domain.ConfigurationConstants;
+import org.obsplatform.infrastructure.configuration.domain.ConfigurationRepository;
+import org.obsplatform.infrastructure.core.api.JsonCommand;
+import org.obsplatform.infrastructure.core.data.CommandProcessingResult;
+import org.obsplatform.infrastructure.core.data.CommandProcessingResultBuilder;
+import org.obsplatform.infrastructure.core.exception.PlatformDataIntegrityException;
+import org.obsplatform.infrastructure.core.service.DateUtils;
+import org.obsplatform.infrastructure.security.service.PlatformSecurityContext;
+import org.obsplatform.organisation.address.data.AddressData;
+import org.obsplatform.organisation.address.domain.Address;
+import org.obsplatform.organisation.address.domain.AddressRepository;
+import org.obsplatform.organisation.address.domain.City;
+import org.obsplatform.organisation.address.domain.CityRepository;
+import org.obsplatform.organisation.address.domain.Country;
+import org.obsplatform.organisation.address.domain.CountryRepository;
+import org.obsplatform.organisation.address.domain.State;
+import org.obsplatform.organisation.address.domain.StateRepository;
+import org.obsplatform.organisation.address.exception.AddressNoRecordsFoundException;
+import org.obsplatform.organisation.address.exception.CityNotFoundException;
+import org.obsplatform.organisation.address.exception.CountryNotFoundException;
+import org.obsplatform.organisation.address.exception.StateNotFoundException;
+import org.obsplatform.organisation.address.serialization.LocationValidatorCommandFromApiJsonDeserializer;
+import org.obsplatform.organisation.mcodevalues.api.CodeNameConstants;
+import org.obsplatform.portfolio.property.domain.PropertyDeviceMapping;
+import org.obsplatform.portfolio.property.domain.PropertyDeviceMappingRepository;
+import org.obsplatform.portfolio.property.domain.PropertyHistoryRepository;
+import org.obsplatform.portfolio.property.domain.PropertyMaster;
+import org.obsplatform.portfolio.property.domain.PropertyMasterRepository;
+import org.obsplatform.portfolio.property.domain.PropertyTransactionHistory;
+import org.obsplatform.portfolio.property.exceptions.PropertyCodeAllocatedException;
+import org.obsplatform.portfolio.property.exceptions.PropertyDeviceMappingExistException;
+import org.obsplatform.portfolio.property.exceptions.PropertyMasterNotFoundException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+
+@Service
+public class AddressWritePlatformServiceImpl implements AddressWritePlatformService {
+	 
+	private final static Logger logger = LoggerFactory.getLogger(AddressWritePlatformServiceImpl.class);
+	private final PlatformSecurityContext context;
+	private final AddressRepository addressRepository;
+	private final CityRepository cityRepository;
+	private final StateRepository stateRepository;
+	private final CountryRepository countryRepository;
+	private final AddressReadPlatformService addressReadPlatformService;
+	private final LocationValidatorCommandFromApiJsonDeserializer locationValidatorCommandFromApiJsonDeserializer;
+	private final PropertyMasterRepository propertyMasterRepository;
+    private final PropertyHistoryRepository propertyHistoryRepository;
+    private final ConfigurationRepository configurationRepository;
+    private final PropertyDeviceMappingRepository propertyDeviceMappingRepository;
+	public static final String ADDRESSTYPE="addressType";
+	
+	
+	
+
+
+	@Autowired
+	public AddressWritePlatformServiceImpl(final PlatformSecurityContext context,final CityRepository cityRepository,final ConfigurationRepository configurationRepository,
+			final AddressReadPlatformService addressReadPlatformService,final StateRepository stateRepository,final CountryRepository countryRepository,
+			final AddressRepository addressRepository,final LocationValidatorCommandFromApiJsonDeserializer locationValidatorCommandFromApiJsonDeserializer,
+			final PropertyMasterRepository propertyMasterRepository, final PropertyHistoryRepository propertyHistoryRepository,
+			final PropertyDeviceMappingRepository propertyDeviceMappingRepository) {
+		
+		this.context = context;
+		this.addressRepository = addressRepository;
+		this.cityRepository=cityRepository;
+		this.stateRepository=stateRepository;
+		this.countryRepository=countryRepository;
+		this.addressReadPlatformService=addressReadPlatformService;
+		this.locationValidatorCommandFromApiJsonDeserializer = locationValidatorCommandFromApiJsonDeserializer;
+		this.propertyMasterRepository = propertyMasterRepository;
+		this.propertyDeviceMappingRepository = propertyDeviceMappingRepository;
+		this.propertyHistoryRepository = propertyHistoryRepository;
+		this.configurationRepository = configurationRepository;
+		
+		
+
+	}
+
+	@Override
+	public CommandProcessingResult createAddress(final Long clientId,final JsonCommand command) {
+		try {
+			context.authenticatedUser();
+			final Address address = Address.fromJson(clientId,command);
+			this.addressRepository.save(address);
+			 PropertyMaster propertyMaster=null;
+	           Configuration propertyConfiguration=this.configurationRepository.findOneByName(ConfigurationConstants.CONFIG_IS_PROPERTY_MASTER);
+				if(propertyConfiguration != null && propertyConfiguration.isEnabled()) {		
+					 propertyMaster=this.propertyMasterRepository.findoneByPropertyCode(command.stringValueOfParameterNamed("addressNo"));
+					if(propertyMaster != null && propertyMaster.getClientId() != null ){
+						throw new PropertyCodeAllocatedException(propertyMaster.getPropertyCode());
+					}
+					
+					propertyMaster.setClientId(clientId);
+					propertyMaster.setStatus(CodeNameConstants.CODE_PROPERTY_OCCUPIED);
+				    this.propertyMasterRepository.saveAndFlush(propertyMaster);
+				    PropertyTransactionHistory propertyHistory = new PropertyTransactionHistory(DateUtils.getLocalDateOfTenant(),propertyMaster.getId(),
+				    		CodeNameConstants.CODE_PROPERTY_ALLOCATE,clientId,propertyMaster.getPropertyCode());
+				    this.propertyHistoryRepository.save(propertyHistory);
+				}
+				
+			return new CommandProcessingResult(address.getId(),clientId);
+		} catch (DataIntegrityViolationException dve) {
+			 handleCodeDataIntegrityIssues(command, dve);
+			return  CommandProcessingResult.empty();
+		}
+	}
+
+	private void handleCodeDataIntegrityIssues(final JsonCommand command,final DataIntegrityViolationException dve) {
+		final Throwable realCause = dve.getMostSpecificCause(); 
+		String entityCode = command.stringValueOfParameterNamed("entityCode");
+		if(realCause.getMessage().contains("country_code")){
+			 throw new PlatformDataIntegrityException("error.msg.addressmaster.country.duplicate.countrycode",
+					 "Country Code with this '"+entityCode+ "' already exists","countryCode",entityCode);
+		}else if(realCause.getMessage().contains("state_code")){
+			 throw new PlatformDataIntegrityException( "error.msg.addressmaster.state.duplicate.statecode",
+					 "State Code with this '"+entityCode+ "' already exists","stateCode",entityCode);
+		}else if(realCause.getMessage().contains("city_code")){
+			 throw new PlatformDataIntegrityException("error.msg.addressmaster.city.duplicate.citycode",
+					 "City Code with this '"+entityCode+ "' already exists","cityCode",entityCode);
+		}
+		  logger.error(dve.getMessage(), dve);
+		
+	}
+
+	@Override
+	public CommandProcessingResult updateAddress(final Long clientId,final JsonCommand command) {
+		
+		try
+		{
+			  context.authenticatedUser();
+	             Map<String, Object> changes =new HashMap<String, Object>();
+	             final List<AddressData> addressDatas =this.addressReadPlatformService.retrieveClientAddressDetails(clientId);
+	             final String addressType=command.stringValueOfParameterNamed(ADDRESSTYPE);
+	             Configuration  configuration=this.configurationRepository.findOneByName(ConfigurationConstants.CONFIG_IS_PROPERTY_MASTER);
+	             
+	             if("BILLING".equalsIgnoreCase(addressType)){
+	            	 
+	            	 final Address  newAddress=Address.fromJson(clientId, command);
+               	     this.addressRepository.saveAndFlush(newAddress);
+               	     if(configuration!=null&&configuration.isEnabled()){
+               	    	 PropertyMaster propertyMaster=this.propertyMasterRepository.findoneByPropertyCode(newAddress.getAddressNo());
+               	    	 propertyMaster.setClientId(clientId);
+            			 propertyMaster.setStatus(CodeNameConstants.CODE_PROPERTY_OCCUPIED);
+                		 this.propertyMasterRepository.saveAndFlush(propertyMaster);
+               	    	 PropertyTransactionHistory propertyHistory = new PropertyTransactionHistory(DateUtils.getLocalDateOfTenant(),propertyMaster.getId(),CodeNameConstants.CODE_PROPERTY_ALLOCATE,
+               	    			newAddress.getClientId(),propertyMaster.getPropertyCode());
+            		     this.propertyHistoryRepository.save(propertyHistory);
+               	     }
+	              }
+	              else{
+	                  for(AddressData addressData:addressDatas){
+	                    	 
+	                    	  if("PRIMARY".equalsIgnoreCase(addressData.getAddressType()))
+	                    	  {
+	                    		  final Address address = retrieveAddressBy(addressData.getAddressId());  
+	                    		  if(configuration != null && configuration.isEnabled()) {		
+	                    		  final String newPropertyCode=command.stringValueOfParameterNamed("addressNo");
+	                    		  PropertyMaster propertyMaster=this.propertyMasterRepository.findoneByPropertyCode(newPropertyCode);
+	                    		  if(propertyMaster!=null){
+	                    			  if(propertyMaster.getClientId() != null ){
+	                  					throw new PropertyCodeAllocatedException(propertyMaster.getPropertyCode());
+	                  				}
+	                    		  PropertyMaster oldPropertyMaster=this.propertyMasterRepository.findoneByPropertyCode(address.getAddressNo());
+	                    		  if(!address.getAddressNo().equalsIgnoreCase(newPropertyCode)&&oldPropertyMaster!=null){
+                                 	 oldPropertyMaster.setClientId(null);
+	                    			 oldPropertyMaster.setStatus(CodeNameConstants.CODE_PROPERTY_VACANT);
+	                    			 this.propertyMasterRepository.saveAndFlush(oldPropertyMaster);
+	                    			 PropertyTransactionHistory propertyHistory = new PropertyTransactionHistory(DateUtils.getLocalDateOfTenant(),oldPropertyMaster.getId(),CodeNameConstants.CODE_PROPERTY_FREE,
+	                    					 null,oldPropertyMaster.getPropertyCode());
+	                    			 this.propertyHistoryRepository.save(propertyHistory);
+	                    			 changes = address.update(command);
+		                        	 this.addressRepository.saveAndFlush(address);
+	                    			 propertyMaster.setClientId(address.getClientId());
+	                    			 propertyMaster.setStatus(CodeNameConstants.CODE_PROPERTY_OCCUPIED);
+		                    		 this.propertyMasterRepository.saveAndFlush(propertyMaster);
+		                    		 PropertyTransactionHistory newpropertyHistory = new PropertyTransactionHistory(DateUtils.getLocalDateOfTenant(),propertyMaster.getId(),CodeNameConstants.CODE_PROPERTY_ALLOCATE,
+		                    					 address.getClientId(),propertyMaster.getPropertyCode());
+		                    		 this.propertyHistoryRepository.save(newpropertyHistory);
+	                    			 } else{
+	                    				 changes = address.update(command);
+			                        	 this.addressRepository.saveAndFlush(address);
+			                        	 propertyMaster.setClientId(address.getClientId());
+		                    			 propertyMaster.setStatus(CodeNameConstants.CODE_PROPERTY_OCCUPIED);
+			                    		 this.propertyMasterRepository.saveAndFlush(propertyMaster);
+			                    		 PropertyTransactionHistory newpropertyHistory = new PropertyTransactionHistory(DateUtils.getLocalDateOfTenant(),propertyMaster.getId(),CodeNameConstants.CODE_PROPERTY_ALLOCATE,
+			                    					 address.getClientId(),propertyMaster.getPropertyCode());
+			                    		 this.propertyHistoryRepository.save(newpropertyHistory);
+	                    			 }
+	                            }else{
+	                            	throw new PropertyMasterNotFoundException(clientId);
+	                            }
+	                    		}else{
+	                    		  /* changes = address.update(command);
+	                        		this.addressRepository.saveAndFlush(address);
+	                    	  */ 
+	                    			
+	                    		//modified for Address issue
+	                    			
+	                    			address.delete();
+	                    			this.addressRepository.saveAndFlush(address);
+	                    			
+	                    			
+	                    			 //changes = address.update(command);
+	                    			final Address  newAddress=Address.fromJson(clientId, command);
+	                    			 
+	                          	    this.addressRepository.save(newAddress);
+	                          	     
+	                    			
+	                    		}
+	                    }
+            }
+	    }
+         return new CommandProcessingResultBuilder() 
+         .withCommandId(command.commandId()) 
+         .withEntityId(clientId) 
+         .withClientId(clientId)
+         .with(changes) 
+         .build();
+	} catch (DataIntegrityViolationException dve) {
+		 handleCodeDataIntegrityIssues(command,dve);
+		return new CommandProcessingResult(Long.valueOf(-1));
+	}
+}
+
+	private Address retrieveAddressBy(final Long addrId) {
+		final Address address=this.addressRepository.findOne(addrId);
+	    if(address== null){
+		throw new CodeNotFoundException(addrId);
+	    }
+	return address;
+	}
+
+	@Override
+	public CommandProcessingResult createLocation(final JsonCommand command,final String entityType) {
+  try{
+	  
+	  this.context.authenticatedUser();
+	 
+	  this.locationValidatorCommandFromApiJsonDeserializer.validateForCreate(command.json(),entityType);
+	  if(entityType.equalsIgnoreCase("city")){
+			final City city = City.fromJson(command);
+		  this.cityRepository.save(city);
+		  return new CommandProcessingResult(Long.valueOf(city.getId()));
+	  }else if(entityType.equalsIgnoreCase("state")){
+		  
+		  final State state=State.fromJson(command);
+		  this.stateRepository.save(state);
+		  
+		  return new CommandProcessingResult(Long.valueOf(state.getId()));
+	  }else{
+		  
+		  final Country country=Country.fromJson(command);
+		  this.countryRepository.save(country);
+		  return new CommandProcessingResult(Long.valueOf(country.getId()));
+	  }
+	  
+		  
+	  
+  } catch (DataIntegrityViolationException dve) {
+	  handleCodeDataIntegrityIssues(command,dve);
+		return new CommandProcessingResult(Long.valueOf(-1));
+	}
+
+	}
+	@Override
+	public CommandProcessingResult updateLocation(final JsonCommand command,final String entityType, final Long id) {
+	  try{
+		this.context.authenticatedUser();
+		this.locationValidatorCommandFromApiJsonDeserializer.validateForCreate(command.json(),entityType);
+		if(entityType.equalsIgnoreCase("city")){
+			final City city=cityObjectRetrieveById(id);
+		   final Map<String, Object> changes = city.update(command);
+		   	if(!changes.isEmpty()){
+		   		this.cityRepository.saveAndFlush(city);
+		   	}
+		   
+      	}else if(entityType.equalsIgnoreCase("state")){
+			  
+      		final State state=stateObjectRetrieveById(id);
+  			final Map<String, Object> changes = state.update(command);
+	  
+  			if(!changes.isEmpty()){
+  				this.stateRepository.saveAndFlush(state);
+  			}
+  	 	}else {
+			  
+  	 		final Country country=countryObjectRetrieveById(id);
+  			final Map<String, Object> changes = country.update(command);
+	  
+  				if(!changes.isEmpty()){
+  					this.countryRepository.saveAndFlush(country);
+  				}
+  	 		}
+		return new CommandProcessingResult(id);
+		  
+	  	}catch (DataIntegrityViolationException dve) {
+	  		if(dve.getCause() instanceof ConstraintViolationException){
+	  			handleCodeDataIntegrityIssues(command,dve);
+	  		}
+	  		return new CommandProcessingResult(Long.valueOf(-1));
+	  	}
+	}
+
+	private City cityObjectRetrieveById(final Long id){
+		final City city=this.cityRepository.findOne(id);
+		if (city== null) { throw new CityNotFoundException(id.toString()); }
+		return city;
+	}
+	private State stateObjectRetrieveById(final Long id){
+		final State state=this.stateRepository.findOne(id);
+		if (state== null) { throw new StateNotFoundException(id.toString()); }
+		return state;
+	}
+	private Country countryObjectRetrieveById(final Long id){
+		final Country country=this.countryRepository.findOne(id);
+		if (country== null) { throw new CountryNotFoundException(id.toString()); }
+		return country;
+	}
+
+	@Override
+	public CommandProcessingResult deleteLocation(final JsonCommand command,final String entityType, final Long id) {
+		
+		try{
+	    	 this.context.authenticatedUser();
+	    	 if(entityType.equalsIgnoreCase("city")){
+	    		 final City city = this.cityRepository.findOne(id);
+	    		 if(city==null){
+	        		 throw new CityNotFoundException(id.toString());
+	        	 }
+	    		 city.delete();
+	    		 this.cityRepository.save(city);
+	    		 return new CommandProcessingResult(id);
+	        	 
+	    	 }else if(entityType.equalsIgnoreCase("state")){
+	    		 final State state = this.stateRepository.findOne(id);
+	    		 if(state==null){
+	        		 throw new StateNotFoundException(id.toString());
+	        	 }
+	    		 state.delete();
+	    		 this.stateRepository.save(state);
+	    		 return new CommandProcessingResult(id);
+	        	 
+	    	 }else{
+	    		 final Country country = this.countryRepository.findOne(id);
+	    			if (country== null) { 
+	    				throw new CountryNotFoundException(id.toString()); 
+	    			}
+	    			country.delete();
+	    			this.countryRepository.save(country);
+	    		 return new CommandProcessingResult(id);
+	        	 
+	    	 }
+	}catch (DataIntegrityViolationException dve) {
+		handleCodeDataIntegrityIssues(command,dve);
+		return null;
+  	}
+  }
+
+	@Transactional
+	@Override
+	public CommandProcessingResult deleteAddress(Long entityId,JsonCommand command) {
+  
+		 try{
+			 this.context.authenticatedUser();
+			 Address address=this.addressRepository.findOne(entityId);
+			 if(address == null){
+				 throw new AddressNoRecordsFoundException("clientAddress");
+			 }
+			 
+		address.delete();
+		this.addressRepository.saveAndFlush(address);
+		Configuration  configuration=this.configurationRepository.findOneByName(ConfigurationConstants.CONFIG_IS_PROPERTY_MASTER);
+		if(configuration != null && configuration.isEnabled()) {	
+			final String newPropertyCode=address.getAddressNo();
+			List<PropertyDeviceMapping>  propertyDeviceMapping=this.propertyDeviceMappingRepository.findByPropertyCode(newPropertyCode);
+			if(propertyDeviceMapping != null && !propertyDeviceMapping.isEmpty()){
+				throw new PropertyDeviceMappingExistException();
+			}
+   		  	PropertyMaster propertyMaster=this.propertyMasterRepository.findoneByPropertyCode(newPropertyCode);
+   		  		if(propertyMaster!=null){
+   		  			propertyMaster.setClientId(null);
+   		  			propertyMaster.setStatus(CodeNameConstants.CODE_PROPERTY_VACANT);
+   		  			this.propertyMasterRepository.saveAndFlush(propertyMaster);
+   		  		PropertyTransactionHistory propertyHistory = new PropertyTransactionHistory(DateUtils.getLocalDateOfTenant(),propertyMaster.getId(),
+						CodeNameConstants.CODE_PROPERTY_FREE, null,propertyMaster.getPropertyCode());
+				this.propertyHistoryRepository.save(propertyHistory);
+   		  		}
+   		  	}
+		return new CommandProcessingResult(entityId);
+		
+		 }catch(DataIntegrityViolationException dve){
+			 handleCodeDataIntegrityIssues(command, dve);
+			 return new CommandProcessingResult(Long.valueOf(-1));
+			 
+		 }
+	}
+}
+

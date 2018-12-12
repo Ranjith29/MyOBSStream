@@ -1,0 +1,18 @@
+package org.obsplatform.billing.discountmaster.service;
+
+import org.obsplatform.billing.discountmaster.domain.DiscountDetails;
+import org.obsplatform.billing.discountmaster.domain.DiscountMaster;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
+
+public interface DiscountDetailRepository extends
+
+JpaRepository<DiscountDetails, Long>,
+JpaSpecificationExecutor<DiscountDetails>{
+   @Query("from DiscountDetails discountDetails where discountDetails.categoryType = :categoryId and discountDetails.discountMaster = :discountMaster and discountDetails.isDeleted ='N' ")
+	DiscountDetails findOneByCategoryAndDiscountId(@Param("categoryId")String categoryId, @Param("discountMaster")DiscountMaster discountMaster);
+	
+
+}

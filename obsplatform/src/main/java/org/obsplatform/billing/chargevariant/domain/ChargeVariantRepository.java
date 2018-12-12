@@ -1,0 +1,11 @@
+package org.obsplatform.billing.chargevariant.domain;
+
+
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
+
+public interface ChargeVariantRepository  extends JpaRepository<ChargeVariant, Long>,
+JpaSpecificationExecutor<ChargeVariant>{
+
+
+}

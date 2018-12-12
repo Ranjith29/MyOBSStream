@@ -1,0 +1,37 @@
+/**
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this file,
+ * You can obtain one at http://mozilla.org/MPL/2.0/.
+ */
+package org.obsplatform.portfolio.servicepartnermapping.handler;
+
+import org.obsplatform.commands.handler.NewCommandSourceHandler;
+import org.obsplatform.infrastructure.core.api.JsonCommand;
+import org.obsplatform.infrastructure.core.data.CommandProcessingResult;
+import org.obsplatform.portfolio.servicepartnermapping.service.ServicePartnerMappingWritePlatformService;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+/**
+ * 
+ * @author Naresh
+ * 
+ */
+@Service
+public class UpdateServicePartnerMappingCommandHandler implements NewCommandSourceHandler {
+
+	private final ServicePartnerMappingWritePlatformService servicePartnerMappingWritePlatformService;
+
+	@Autowired
+	public UpdateServicePartnerMappingCommandHandler(final ServicePartnerMappingWritePlatformService servicePartnerMappingWritePlatformService) {
+		this.servicePartnerMappingWritePlatformService = servicePartnerMappingWritePlatformService;
+	}
+
+	@Transactional
+	@Override
+	public CommandProcessingResult processCommand(final JsonCommand command) {
+
+		return this.servicePartnerMappingWritePlatformService.updateServicePartnerMapping(command.entityId(), command);
+	}
+}
